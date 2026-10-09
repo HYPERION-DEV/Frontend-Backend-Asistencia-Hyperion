@@ -1,0 +1,120 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  HR
+  EMPLOYEE
+}
+
+enum AttendanceType {
+  PRESENTIAL_QR
+  PRESENTIAL_NFC
+  BIOMETRIC_FINGERPRINT
+  FACIAL_RECOGNITION
+  HOME_OFFICE
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  WEEKEND_REST
+  HOLIDAY
+}
+
+model Company {
+  id        String   @id @default(uuid())
+  name      String   @default("Hyperion Digital Security S.A.C.")
+  ruc       String   @unique @default("20608810987")
+  officeLat Float    @default(-14.078775)
+  officeLng Float    @default(-75.751176)
+  radiusM   Float    @default(30.0)
+  qrSecret  String   @default("HYPERION_QR_SECRET_KEY_2026")
+  users     User[]
+  createdAt DateTime @default(now())
+}
+
+model User {
+  id               String   @id @default(uuid())
+  dni              String   @unique
+  name             String
+  lastName         String
+  email            String   @unique
+  passwordHash     String
+  role             Role     @default(EMPLOYEE)
+  jobTitle         String
+  workStartTime    String   @default("09:00")
+  toleranceMinutes Int      @default(10)
+  homeOfficeQuota  Int      @default(4)
+  overtimeRate     Float    @default(1.25)
+  baseSalary       Float    @default(0.0)
+  discountRate     Float    @default(0.0)
+  
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+
+  homeAddresses     HomeAddress[]
+  attendanceRecords AttendanceRecord[]
+  auditLogs         AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model HomeAddress {
+  id        String   @id @default(uuid())
+  alias     String   @default("Casa Principal")
+  latitude  Float
+  longitude Float
+  address   String?
+  isPrimary Boolean  @default(true)
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model AttendanceRecord {
+  id                String           @id @default(uuid())
+  userId            String
+  user              User             @relation(fields: [userId], references: [id])
+  date              DateTime         @db.Date
+  checkIn           DateTime?
+  lunchStart        DateTime?
+  lunchEnd          DateTime?
+  checkOut          DateTime?
+  type              AttendanceType
+  status            AttendanceStatus @default(PRESENT)
+
+  lateMinutes       Int              @default(0)
+  overtimeMinutes   Int              @default(0)
+
+  latitude          Float
+  longitude         Float
+  employeeSignature String?
+  observations      String?
+  createdAt         DateTime         @default(now())
+}
+
+model AuditLog {
+  id            String   @id @default(uuid())
+  performedById String
+  performedBy   User     @relation(fields: [performedById], references: [id])
+  entity        String
+  entityId      String
+  action        String
+  previousValue String?  @db.Text
+  newValue      String?  @db.Text
+  reason        String   @db.Text
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+}
