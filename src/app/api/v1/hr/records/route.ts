@@ -6,47 +6,45 @@ export async function GET() {
   try {
     const records = await prisma.attendanceRecord.findMany({
       include: {
-        user: true,
+        user: {
+          select: {
+            id: true,
+            name: true,
+            lastName: true,
+            dni: true,
+            docType: true,
+            jobTitle: true,
+            workStartTime: true,
+            toleranceMinutes: true,
+            payrollPolicy: true,
+            company: {
+              select: {
+                name: true,
+                ruc: true,
+              },
+            },
+          },
+        },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { date: 'desc' },
     });
 
     const formattedRecords = records.map((r) => ({
-      id: r.id,
-      // Formato YYYY-MM-DD para la columna Fecha
-      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '--',
-      
-      // Enviar las fechas en formato ISO puro para que el frontend las entienda sin romper
+      ...r,
+      date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
       checkIn: r.checkIn ? r.checkIn.toISOString() : null,
+      lunchStart: r.lunchStart ? r.lunchStart.toISOString() : null, // 👈 Exportación explícita
+      lunchEnd: r.lunchEnd ? r.lunchEnd.toISOString() : null,       // 👈 Exportación explícita
       checkOut: r.checkOut ? r.checkOut.toISOString() : null,
-      lunchStart: r.lunchStart ? r.lunchStart.toISOString() : null,
-      lunchEnd: r.lunchEnd ? r.lunchEnd.toISOString() : null,
-      
-      status: r.status,
-      type: r.type || 'PRESENTIAL_QR', // Incluir tipo de marcación
-      lateMinutes: r.lateMinutes || 0,
-      overtimeMinutes: r.overtimeMinutes || 0,
-      latitude: r.latitude || null,    // Incluir GPS
-      longitude: r.longitude || null,  // Incluir GPS
-      
       user: {
-        id: r.user.id,
-        name: r.user.name,
-        lastName: r.user.lastName,
-        dni: r.user.dni,
-        jobTitle: r.user.jobTitle,
-        baseSalary: r.user.baseSalary,
-        discountRate: r.user.discountRate,
-        homeOfficeQuota: r.user.homeOfficeQuota || 4,
+        ...r.user,
+        companyName: r.user.company?.name || 'HYPERION DIGITAL SECURITY S.A.C.',
+        companyRuc: r.user.company?.ruc || '20608810987',
       },
     }));
 
     return NextResponse.json({ success: true, records: formattedRecords });
   } catch (error: any) {
-    console.error('❌ Error obteniendo registros de marcación:', error);
-    return NextResponse.json(
-      { success: false, error: 'Error cargando historial', records: [] },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

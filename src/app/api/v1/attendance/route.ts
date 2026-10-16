@@ -7,7 +7,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { userId, type, actionType, lat, lng, signature, qrContent } = body; 
-    // actionType admite: 'CHECK_IN' | 'LUNCH_START' | 'LUNCH_END' | 'CHECK_OUT'
 
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lng);
@@ -41,7 +40,6 @@ export async function POST(req: NextRequest) {
     // ---------------------------------------------------------
     let homeOfficeRemaining = 0;
 
-    // Validación de QR en modo presencial
     if (type === 'PRESENTIAL_QR') {
       if (!qrContent || qrContent !== user.company.qrSecret) {
         return NextResponse.json(
@@ -51,7 +49,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Validación de rango para métodos presenciales (Oficina)
     if (['PRESENTIAL_QR', 'PRESENTIAL_NFC', 'BIOMETRIC_FINGERPRINT', 'FACIAL_RECOGNITION'].includes(type)) {
       const distance = calculateDistanceInMeters(
         latitude,
@@ -65,9 +62,7 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         );
       }
-    } 
-    // Validación de domicilio y cuota mensual en Home Office
-    else if (type === 'HOME_OFFICE') {
+    } else if (type === 'HOME_OFFICE') {
       if (user.homeAddresses.length === 0) {
         return NextResponse.json(
           { error: 'No tiene domicilios registrados para Home Office.' },
@@ -109,7 +104,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ---------------------------------------------------------
-    // 3. REGISTRO SEGÚN EL CICLO (CHECK_IN / REFRIGERIO / CHECK_OUT)
+    // 3. REGISTRO SEGÚN EL CICLO CON CUMPLIMIENTO SUNAFIL
     // ---------------------------------------------------------
     let record = await prisma.attendanceRecord.findFirst({
       where: { userId: user.id, date: today },
@@ -117,7 +112,7 @@ export async function POST(req: NextRequest) {
 
     const currentAction = actionType || 'CHECK_IN';
 
-    // A) REGISTRO DE INGRESO (CHECK_IN)
+    // A) REGISTRO DE INGRESO (CHECK_IN) - TOLERANCIA DEDUCIBLE
     if (currentAction === 'CHECK_IN') {
       if (record) {
         return NextResponse.json(
@@ -126,7 +121,25 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // Cálculo de Tardanza según hora de entrada y tolerancia
+      // VALIDACIÓN LEY DE TELETRABAJO: Desconexión Digital (12 horas mínimas continuas)
+      const lastRecord = await prisma.attendanceRecord.findFirst({
+        where: { userId: user.id, checkOut: { not: null } },
+        orderBy: { checkOut: 'desc' },
+      });
+
+      if (lastRecord && lastRecord.checkOut) {
+        const restMs = serverTimestamp.getTime() - lastRecord.checkOut.getTime();
+        const restHours = restMs / (1000 * 60 * 60);
+        if (restHours < 12) {
+          const remainingMinutes = Math.ceil((12 - restHours) * 60);
+          return NextResponse.json(
+            { error: `Infracción a la Ley de Teletrabajo: Debe cumplir 12 horas continuas de desconexión digital. Le faltan ${remainingMinutes} minuto(s).` },
+            { status: 403 }
+          );
+        }
+      }
+
+      // Cálculo de Tardanza con Tolerancia Deducible
       const [workHour, workMin] = user.workStartTime.split(':').map(Number);
       const graceLimitTime = new Date(serverTimestamp);
       graceLimitTime.setHours(workHour, workMin + user.toleranceMinutes, 0, 0);
@@ -136,8 +149,14 @@ export async function POST(req: NextRequest) {
 
       if (serverTimestamp > graceLimitTime) {
         status = 'LATE';
-        const diffMs = serverTimestamp.getTime() - graceLimitTime.getTime();
-        lateMinutes = Math.floor(diffMs / (1000 * 60));
+        const expectedTime = new Date(serverTimestamp);
+        expectedTime.setHours(workHour, workMin, 0, 0);
+        
+        const diffMs = serverTimestamp.getTime() - expectedTime.getTime();
+        const totalLateMinutes = Math.floor(diffMs / (1000 * 60));
+
+        // Descontar la tolerancia del tiempo total de tardanza
+        lateMinutes = Math.max(0, totalLateMinutes - user.toleranceMinutes);
       }
 
       record = await prisma.attendanceRecord.create({
@@ -165,13 +184,34 @@ export async function POST(req: NextRequest) {
       });
     } 
 
-    // B) INICIO DE REFRIGERIO (LUNCH_START)
+    // B) INICIO DE REFRIGERIO (LUNCH_START) - VENTANA DE 1:00 PM A 1:30 PM
     else if (currentAction === 'LUNCH_START') {
       if (!record) {
         return NextResponse.json({ error: 'Debe marcar su entrada primero.' }, { status: 400 });
       }
       if (record.lunchStart) {
         return NextResponse.json({ error: 'Ya registró inicio de refrigerio el día de hoy.' }, { status: 400 });
+      }
+
+      // Validar ventana horaria (13:00 a 13:30)
+      const windowStart = new Date(serverTimestamp);
+      windowStart.setHours(13, 0, 0, 0); // 1:00 PM
+
+      const windowEnd = new Date(serverTimestamp);
+      windowEnd.setHours(13, 30, 0, 0); // 1:30 PM
+
+      if (serverTimestamp < windowStart) {
+        return NextResponse.json(
+          { error: 'El horario permitido para iniciar el refrigerio es a partir de la 1:00 PM.' },
+          { status: 400 }
+        );
+      }
+
+      if (serverTimestamp > windowEnd) {
+        return NextResponse.json(
+          { error: 'Ha superado la hora límite para salir a refrigerio (Máximo 1:30 PM).' },
+          { status: 400 }
+        );
       }
 
       record = await prisma.attendanceRecord.update({
@@ -182,18 +222,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         action: 'LUNCH_START',
-        message: 'Inicio de refrigerio registrado con éxito',
+        message: 'Inicio de refrigerio registrado con éxito. Recuerde que su tiempo de refrigerio es de 60 minutos.',
         record,
       });
     }
 
-    // C) FIN DE REFRIGERIO (LUNCH_END)
+    // C) FIN DE REFRIGERIO (LUNCH_END) - VALIDACIÓN DE 60 MINUTOS DESDE LUNCH_START
     else if (currentAction === 'LUNCH_END') {
       if (!record || !record.lunchStart) {
         return NextResponse.json({ error: 'No ha registrado inicio de refrigerio previamente.' }, { status: 400 });
       }
       if (record.lunchEnd) {
         return NextResponse.json({ error: 'Ya registró fin de refrigerio el día de hoy.' }, { status: 400 });
+      }
+
+      const diffMs = serverTimestamp.getTime() - record.lunchStart.getTime();
+      const lunchMinutes = Math.floor(diffMs / (1000 * 60));
+
+      // Contar 60 minutos obligatorios a partir de la marcación de inicio
+      if (lunchMinutes < 60) {
+        const remaining = 60 - lunchMinutes;
+        return NextResponse.json(
+          { error: `Su tiempo de refrigerio configurado es de 60 minutos (1 hora). Le faltan ${remaining} minuto(s).` },
+          { status: 400 }
+        );
       }
 
       record = await prisma.attendanceRecord.update({
@@ -209,7 +261,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // D) REGISTRO DE SALIDA (CHECK_OUT)
+    // D) REGISTRO DE SALIDA (CHECK_OUT) - CÁLCULO SOBRETASAS LEY N° 28999 DESDE HORA OFICIAL
     else if (currentAction === 'CHECK_OUT') {
       if (!record || !record.checkIn) {
         return NextResponse.json({ error: 'Debe marcar su entrada primero.' }, { status: 400 });
@@ -218,17 +270,37 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Ya registró su salida el día de hoy.' }, { status: 400 });
       }
 
-      // Cálculo de Horas Extras (Jornada laboral de 8 horas / 480 minutos)
-      const hoursWorkedMs = serverTimestamp.getTime() - record.checkIn.getTime();
-      const totalMinutesWorked = Math.floor(hoursWorkedMs / (1000 * 60));
-      const standardShiftMinutes = 8 * 60; // 480 min
-      const overtimeMinutes = totalMinutesWorked > standardShiftMinutes ? totalMinutesWorked - standardShiftMinutes : 0;
+      // 1. Obtener la hora oficial de entrada asignada al trabajador (ej. "09:00")
+      const [workHour, workMin] = user.workStartTime.split(':').map(Number);
+
+      // 2. Definir la hora oficial de salida teórica (Entrada + 8h trabajo + 1h refrigerio = Entrada + 9h)
+      const officialCheckOut = new Date(record.date);
+      officialCheckOut.setHours(workHour + 9, workMin, 0, 0);
+
+      // 3. Las Horas Extras comienzan a contarse ÚNICAMENTE después de pasar la hora oficial de salida
+      let totalOvertimeMinutes = 0;
+      if (serverTimestamp > officialCheckOut) {
+        const diffMs = serverTimestamp.getTime() - officialCheckOut.getTime();
+        totalOvertimeMinutes = Math.floor(diffMs / (1000 * 60));
+      }
+
+      // 4. Desglose en tramos del 25% (primeras 2 horas) y 35% (a partir de la 3ra hora)
+      let overtime25Minutes = 0;
+      let overtime35Minutes = 0;
+
+      if (totalOvertimeMinutes > 0) {
+        overtime25Minutes = Math.min(totalOvertimeMinutes, 120);
+        overtime35Minutes = Math.max(0, totalOvertimeMinutes - 120);
+      }
 
       record = await prisma.attendanceRecord.update({
         where: { id: record.id },
         data: {
           checkOut: serverTimestamp,
-          overtimeMinutes,
+          overtimeMinutes: totalOvertimeMinutes,
+          overtime25Minutes,
+          overtime35Minutes,
+          isOvertimeApproved: false,
         },
       });
 
@@ -236,7 +308,9 @@ export async function POST(req: NextRequest) {
         success: true,
         action: 'CHECK_OUT',
         message: 'Salida registrada con éxito',
-        overtimeMinutes,
+        overtimeMinutes: totalOvertimeMinutes,
+        overtime25Minutes,
+        overtime35Minutes,
         record,
       });
     }

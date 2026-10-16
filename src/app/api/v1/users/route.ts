@@ -3,31 +3,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 
-// 1. OBTENER LISTA DE TRABAJADORES (Soluciona el error GET 405)
+// 1. OBTENER LISTA DE TRABAJADORES (Incluye régimen de planilla y datos de la empresa)
 export async function GET() {
   try {
     const users = await prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        dni: true,
-        name: true,
-        lastName: true,
-        email: true,
-        jobTitle: true,
-        workStartTime: true,
-        toleranceMinutes: true,
-        homeOfficeQuota: true,
-        overtimeRate: true,
-        baseSalary: true,
-        role: true,
+      include: {
+        payrollPolicy: true, // Incluye los datos completos de la política para el frontend
+        company: true,
       },
     });
 
     return NextResponse.json({ success: true, users });
   } catch (error: any) {
     return NextResponse.json(
-      { success: false, error: 'Error al consultar la lista de usuarios' },
+      { success: false, error: 'Error al consultar la lista de usuarios', details: error?.message },
       { status: 500 }
     );
   }
@@ -48,6 +38,9 @@ export async function POST(req: NextRequest) {
       homeOfficeQuota,
       overtimeRate,
       baseSalary,
+      hoursPerDay,
+      daysInMonth,
+      payrollPolicyId,
     } = body;
 
     // Verificar si el DNI o Email ya existen
@@ -64,7 +57,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Obtener el ID de la primera empresa disponible en la base de datos
+    // Obtener la empresa por defecto
     const company = await prisma.company.findFirst();
     if (!company) {
       return NextResponse.json(
@@ -85,11 +78,17 @@ export async function POST(req: NextRequest) {
         passwordHash,
         jobTitle: jobTitle || 'Empleado',
         workStartTime: workStartTime || '09:00',
-        toleranceMinutes: parseInt(toleranceMinutes) || 10,
-        homeOfficeQuota: parseInt(homeOfficeQuota) || 4,
-        overtimeRate: parseFloat(overtimeRate) || 1.25,
-        baseSalary: parseFloat(baseSalary) || 0.0,
+        toleranceMinutes: toleranceMinutes ? parseInt(String(toleranceMinutes)) : 10,
+        homeOfficeQuota: homeOfficeQuota ? parseInt(String(homeOfficeQuota)) : 4,
+        overtimeRate: overtimeRate ? parseFloat(String(overtimeRate)) : 1.25,
+        baseSalary: baseSalary ? parseFloat(String(baseSalary)) : 0.0,
+        hoursPerDay: hoursPerDay ? parseFloat(String(hoursPerDay)) : 8.0,
+        daysInMonth: daysInMonth ? parseInt(String(daysInMonth)) : 30,
+        payrollPolicyId: payrollPolicyId && String(payrollPolicyId).trim() !== '' ? payrollPolicyId : null,
         companyId: company.id,
+      },
+      include: {
+        payrollPolicy: true,
       },
     });
 
@@ -101,7 +100,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error('Error registrando trabajador:', error);
     return NextResponse.json(
-      { error: 'Error al guardar el nuevo trabajador', details: error.message },
+      { error: 'Error al guardar el nuevo trabajador', details: error?.message },
       { status: 500 }
     );
   }
