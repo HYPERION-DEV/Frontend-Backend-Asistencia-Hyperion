@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -31,6 +29,20 @@ enum AttendanceStatus {
   HOLIDAY
 }
 
+enum PermissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PermissionType {
+  MEDICAL_LEAVE       // Descanso Médico (ESSALUD)
+  PERSONAL_PERMIT     // Papeleta de Salida Particular
+  MATERNITY_PATERNITY // Licencia Maternidad/Paternidad
+  VACATION_LEAVE      // Saldo de Vacaciones
+  COMMISSION          // Comisión de Servicio Externo
+}
+
 model Company {
   id              String          @id @default(uuid())
   name            String          @default("Hyperion Digital Security S.A.C.") // Razón Social exigida por SUNAFIL
@@ -40,7 +52,7 @@ model Company {
   radiusM         Float           @default(30.0)
   qrSecret        String          @default("HYPERION_QR_SECRET_KEY_2026")
   users           User[]
-  payrollPolicies PayrollPolicy[] // 👈 Relación inversa añadida
+  payrollPolicies PayrollPolicy[]
   createdAt       DateTime        @default(now())
 }
 
@@ -60,12 +72,11 @@ model User {
   baseSalary       Float    @default(0.0)
   discountRate     Float    @default(0.0)
 
-  companyId        String
-  company          Company  @relation(fields: [companyId], references: [id])
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
 
-  // Única fuente de verdad para divisores y sobretasas de nómina
-  payrollPolicyId  String?
-  payrollPolicy    PayrollPolicy? @relation(fields: [payrollPolicyId], references: [id])
+  payrollPolicyId String?
+  payrollPolicy   PayrollPolicy? @relation(fields: [payrollPolicyId], references: [id])
 
   homeAddresses      HomeAddress[]
   attendanceRecords  AttendanceRecord[]
@@ -91,35 +102,35 @@ model HomeAddress {
 }
 
 model AttendanceRecord {
-  id                  String           @id @default(uuid())
-  userId              String
-  user                User             @relation(fields: [userId], references: [id])
-  date                DateTime         @db.Date
-  checkIn             DateTime?
-  lunchStart          DateTime?
-  lunchEnd            DateTime?
-  checkOut            DateTime?
-  type                AttendanceType   @default(PRESENTIAL_QR)
-  status              AttendanceStatus @default(PRESENT)
+  id                   String           @id @default(uuid())
+  userId               String
+  user                 User             @relation(fields: [userId], references: [id])
+  date                 DateTime         @db.Date
+  checkIn              DateTime?
+  lunchStart           DateTime?
+  lunchEnd             DateTime?
+  checkOut             DateTime?
+  type                 AttendanceType   @default(PRESENTIAL_QR)
+  status               AttendanceStatus @default(PRESENT)
 
-  lateMinutes         Int              @default(0)
+  lateMinutes          Int              @default(0)
 
   // CUMPLIMIENTO LEY N° 28999: SOBRETASAS DE HORAS EXTRAS (25% Y 35%)
-  overtimeMinutes     Int              @default(0) // Minutos totales excedidos
-  overtime25Minutes   Int              @default(0) // Primeras 2 horas extras (hasta 120 min)
-  overtime35Minutes   Int              @default(0) // A partir de la 3ra hora extra
-  isOvertimeApproved  Boolean          @default(false)
-  approvedBy          String?
+  overtimeMinutes      Int              @default(0)
+  overtime25Minutes    Int              @default(0)
+  overtime35Minutes    Int              @default(0)
+  isOvertimeApproved   Boolean          @default(false)
+  approvedBy           String?
 
   // TRANSPARENCIA LABORAL D.S. N° 004-2006-TR
-  isModifiedByHR      Boolean          @default(false)
-  hrModificationReason String?         @db.Text
+  isModifiedByHR       Boolean          @default(false)
+  hrModificationReason String?          @db.Text
 
-  latitude            Float
-  longitude           Float
-  employeeSignature   String?
-  observations        String?
-  createdAt           DateTime         @default(now())
+  latitude             Float
+  longitude            Float
+  employeeSignature    String?
+  observations         String?
+  createdAt            DateTime         @default(now())
 }
 
 model AuditLog {
@@ -136,37 +147,22 @@ model AuditLog {
   createdAt     DateTime @default(now())
 }
 
-// ===================================================================
-// EXTENSIONES DEL SCHEMA PARA MÓDULOS DE RRHH, SST E ISO 27001
-// ===================================================================
-
-enum PermissionStatus {
-  PENDING
-  APPROVED
-  REJECTED
-}
-
-enum PermissionType {
-  MEDICAL_LEAVE       // Descanso Médico (ESSALUD)
-  PERSONAL_PERMIT     // Papeleta de Salida Particular
-  MATERNITY_PATERNITY // Licencia Maternidad/Paternidad
-  VACATION_LEAVE      // Saldo de Vacaciones
-  COMMISSION          // Comisión de Servicio Externo
-}
-
 model PermissionRequest {
-  id          String           @id @default(uuid())
-  userId      String
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type        PermissionType   @default(PERSONAL_PERMIT)
-  reason      String           @db.Text
-  startDate   DateTime
-  endDate     DateTime
-  status      PermissionStatus @default(PENDING)
-  approvedBy  String?
-  employeeSignature  String?          @db.Text // 👈 NUEVO: Almacena la firma Base64 o token biométrico
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  id                String           @id @default(uuid())
+  userId            String
+  type              PermissionType   @default(PERSONAL_PERMIT)
+  reason            String           @db.Text
+  startDate         DateTime
+  endDate           DateTime
+  status            PermissionStatus @default(PENDING)
+  approvedBy        String?
+  employeeSignature String?          @db.Text // Trazo de firma táctil (PNG Base64)
+  signedPdfBase64   String?          @db.Text // PDF firmado con Certificado Camercloud PAdES-B
+  signatureCode     String?          @db.Text // 👈 CÓDIGO DE FIRMA DEVUELTO POR CAMERCLOUD
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model SstRecord {

@@ -1,7 +1,8 @@
+// src/app/dashboard/permissions/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileCheck2, PlusCircle, Clock, Check, X, Eye, Signature } from 'lucide-react';
+import { FileCheck2, PlusCircle, Clock, Check, X, Eye, Signature, FileText } from 'lucide-react';
 
 interface Permission {
   id: string;
@@ -10,7 +11,9 @@ interface Permission {
   startDate: string;
   endDate: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
-  employeeSignature?: string | null; // 👈 Campo de firma Base64
+  employeeSignature?: string | null; // Firma táctil Base64 desde Flutter
+  signedPdfBase64?: string | null;
+  signatureCode?: string | null;     // Código de firma devuelto por Camercloud
   user: {
     id: string;
     name: string;
@@ -31,7 +34,7 @@ export default function PermissionsPage() {
   const [users, setUsers] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [selectedSignature, setSelectedSignature] = useState<string | null>(null); // Modal de firma
+  const [selectedSignature, setSelectedSignature] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     userId: '',
@@ -68,8 +71,29 @@ export default function PermissionsPage() {
     loadData();
   }, []);
 
+  // Función para aprobar y firmar digitalmente con Camercloud o rechazar la solicitud
   const handleUpdateStatus = async (requestId: string, newStatus: 'APPROVED' | 'REJECTED') => {
     try {
+      if (newStatus === 'APPROVED') {
+        // 1. Invocar el proceso de firma digital en Camercloud
+        const resSign = await fetch('/api/v1/hr/permissions/sign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ permissionId: requestId }),
+        });
+
+        if (resSign.ok) {
+          alert('Papeleta aprobada y firmada digitalmente con éxito mediante Camercloud.');
+          loadData();
+          return;
+        } else {
+          const err = await resSign.json().catch(() => ({}));
+          alert(`Error firmando con Camercloud: ${err.error || 'Fallo inesperado'}`);
+          return;
+        }
+      }
+
+      // Si es rechazar, simplemente actualizamos el estado
       const res = await fetch('/api/v1/hr/permissions', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -81,7 +105,7 @@ export default function PermissionsPage() {
       });
 
       if (res.ok) {
-        alert(`Solicitud ${newStatus === 'APPROVED' ? 'Aprobada' : 'Rechazada'} correctamente.`);
+        alert('Solicitud rechazada correctamente.');
         loadData();
       } else {
         alert('Error al actualizar el estado de la solicitud');
@@ -203,9 +227,9 @@ export default function PermissionsPage() {
                 </div>
               </div>
 
-              {/* Acciones de RRHH: Botón Ver Firma + Estado */}
+              {/* Acciones de RRHH: Botones de Firma, PDF y Estado */}
               <div className="flex items-center gap-3">
-                {/* Botón para Auditar la Firma */}
+                {/* 1. Botón para ver la firma táctil enviada desde Flutter */}
                 {p.employeeSignature ? (
                   <button
                     onClick={() => setSelectedSignature(p.employeeSignature!)}
@@ -218,6 +242,22 @@ export default function PermissionsPage() {
                   <span className="text-[11px] text-slate-500 italic">Sin firma</span>
                 )}
 
+                {/* 2. Botón para abrir/descargar el PDF firmado por Camercloud */}
+                {p.status === 'APPROVED' && (
+                  <button
+                    onClick={() => {
+                      // Apunta prioritariamente al signatureCode de Camercloud, o al id del permiso
+                      const identifier = p.signatureCode || p.id;
+                      window.open(`/api/v1/hr/permissions/${identifier}/download`, '_blank');
+                    }}
+                    className="flex items-center gap-1.5 bg-blue-950/60 hover:bg-blue-900 border border-blue-800 text-blue-400 text-xs font-bold px-3 py-1.5 rounded-lg transition"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-blue-400" />
+                    Descargar PDF Firmado
+                  </button>
+                )}
+
+                {/* 3. Aprobación / Estado */}
                 {p.status === 'PENDING' ? (
                   <div className="flex items-center gap-2">
                     <button
@@ -250,7 +290,7 @@ export default function PermissionsPage() {
         </div>
       )}
 
-      {/* Modal para Visualizar la Firma Táctil Auditable */}
+      {/* Modal Visor de Firma Táctil */}
       {selectedSignature && (
         <div className="fixed inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 z-50">
           <div className="w-full max-w-md rounded-2xl bg-slate-900 p-6 shadow-2xl border border-slate-800 text-slate-200 space-y-4 text-center">
@@ -295,7 +335,7 @@ export default function PermissionsPage() {
         </div>
       )}
 
-      {/* Modal para Registrar Solicitud */}
+      {/* Modal Nueva Solicitud */}
       {showModal && (
         <div className="fixed inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 z-50">
           <div className="w-full max-w-lg rounded-2xl bg-slate-950 p-6 shadow-2xl border border-slate-800 text-slate-200 space-y-4">
